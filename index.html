@@ -19,6 +19,12 @@
   --good:#5B7A5E;
   --danger:#9C4A3B;
   --shadow: rgba(42,38,32,0.10);
+  --heat0:#DFD8C8;
+  --heat1:#CBDDEC;
+  --heat2:#9DC0DC;
+  --heat3:#6C9CC4;
+  --heat4:#3F76A6;
+  --heat5:#22527C;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
@@ -33,6 +39,12 @@
     --good:#7FA083;
     --danger:#C97A63;
     --shadow: rgba(0,0,0,0.35);
+    --heat0:#2C271F;
+    --heat1:#1F3A4F;
+    --heat2:#2B5878;
+    --heat3:#3B7AA4;
+    --heat4:#579EC8;
+    --heat5:#89C4E6;
   }
 }
 :root[data-theme="dark"]{
@@ -47,6 +59,12 @@
   --good:#7FA083;
   --danger:#C97A63;
   --shadow: rgba(0,0,0,0.35);
+  --heat0:#2C271F;
+  --heat1:#1F3A4F;
+  --heat2:#2B5878;
+  --heat3:#3B7AA4;
+  --heat4:#579EC8;
+  --heat5:#89C4E6;
 }
 
 *{box-sizing:border-box;}
@@ -321,6 +339,92 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   border-top:1px solid var(--line);
   flex-wrap:wrap;
 }
+/* ---- bảng nhiệt: mỗi ô một ngày ---- */
+.heat-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  gap:16px;
+  flex-wrap:wrap;
+  margin:32px 0 12px;
+}
+.section-title{
+  font-family:"Fraunces", Georgia, serif;
+  font-weight:600;
+  font-size:16px;
+}
+.heat-sub{ font-size:11.5px; color:var(--ink-soft); }
+.heat-legend{ display:flex; align-items:center; gap:4px; font-size:10.5px; color:var(--ink-soft); }
+.heat-legend i{ width:11px; height:11px; border-radius:2px; display:inline-block; }
+.heat-wrap{ overflow-x:auto; padding-bottom:8px; }
+.heat-inner{ display:inline-block; min-width:100%; }
+.heat-months{
+  display:grid;
+  grid-auto-flow:column;
+  grid-auto-columns:16px;
+  margin-left:24px;
+  height:14px;
+  font-size:10px;
+  color:var(--ink-soft);
+}
+.heat-months span{ white-space:nowrap; }
+.heat-body{ display:flex; gap:6px; }
+.heat-days{
+  display:grid;
+  grid-template-rows:repeat(7,13px);
+  gap:3px;
+  width:18px;
+  font-size:9.5px;
+  color:var(--ink-soft);
+}
+.heat-days span{ line-height:13px; }
+.heat-grid{
+  display:grid;
+  grid-auto-flow:column;
+  grid-template-rows:repeat(7,13px);
+  grid-auto-columns:13px;
+  gap:3px;
+}
+.heat-cell{ width:13px; height:13px; border-radius:2px; background:var(--heat0); }
+.heat-cell.future{ background:transparent; }
+.heat-cell.lv1{ background:var(--heat1); }
+.heat-cell.lv2{ background:var(--heat2); }
+.heat-cell.lv3{ background:var(--heat3); }
+.heat-cell.lv4{ background:var(--heat4); }
+.heat-cell.lv5{ background:var(--heat5); }
+.heat-cell[data-day]{ cursor:pointer; }
+.heat-cell[data-day]:hover{ outline:1.5px solid var(--ink); outline-offset:1px; }
+.heat-cell.today{ box-shadow:0 0 0 1.5px var(--accent-strong); }
+
+.tip{
+  position:fixed;
+  z-index:40;
+  background:var(--paper-raised);
+  border:1px solid var(--line);
+  box-shadow:0 10px 26px var(--shadow);
+  border-radius:8px;
+  padding:11px 13px;
+  font-size:12px;
+  max-width:250px;
+  pointer-events:none;
+}
+.tip-date{ font-weight:600; margin-bottom:5px; }
+.tip-total{
+  font-family:"IBM Plex Mono", Consolas, monospace;
+  font-variant-numeric:tabular-nums;
+  color:var(--accent-strong);
+  margin-bottom:7px;
+}
+.tip-row{ display:flex; align-items:center; gap:7px; margin-top:4px; color:var(--ink-soft); }
+.tip-row .dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.tip-row .amt{
+  margin-left:auto;
+  font-family:"IBM Plex Mono", Consolas, monospace;
+  font-variant-numeric:tabular-nums;
+  color:var(--ink);
+}
+.tip-empty{ color:var(--ink-soft); font-style:italic; }
+
 .sync{
   margin-top:26px;
   border:1px solid var(--line);
@@ -561,6 +665,38 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     </div>
   </div>
 
+  <div class="heat-head">
+    <div>
+      <span class="section-title">Lịch giờ học</span>
+      <div class="heat-sub">Mỗi ô là một ngày — càng học nhiều, ô càng đậm. Đưa chuột vào ô để xem chi tiết.</div>
+    </div>
+    <div class="heat-legend">
+      Ít
+      <i style="background:var(--heat0)"></i>
+      <i style="background:var(--heat1)"></i>
+      <i style="background:var(--heat2)"></i>
+      <i style="background:var(--heat3)"></i>
+      <i style="background:var(--heat4)"></i>
+      <i style="background:var(--heat5)"></i>
+      Nhiều
+    </div>
+  </div>
+  <div class="heat-wrap" id="heatWrap">
+    <div class="heat-inner">
+      <div class="heat-months" id="heatMonths"></div>
+      <div class="heat-body">
+        <div class="heat-days">
+          <span style="grid-row:1">T2</span>
+          <span style="grid-row:3">T4</span>
+          <span style="grid-row:5">T6</span>
+          <span style="grid-row:7">CN</span>
+        </div>
+        <div class="heat-grid" id="heatGrid"></div>
+      </div>
+    </div>
+  </div>
+  <div class="tip" id="tip" hidden></div>
+
   <div class="sync" id="syncBox" hidden>
     <div>
       <span class="sync-title">Đồng bộ nhiều thiết bị</span>
@@ -761,6 +897,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
 
   function saveState(){
     state.updatedAt = Date.now();
+    heatDirty = true;
     try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
     catch(e){ storageOK = false; updateStorageHint(); }
     queuePush();
@@ -1413,6 +1550,134 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     }
   }
 
+  /* ---------- bảng nhiệt theo ngày ---------- */
+  var heatGrid = document.getElementById("heatGrid");
+  var heatMonths = document.getElementById("heatMonths");
+  var tipEl = document.getElementById("tip");
+  var heatCells = {};
+  var heatDirty = true;
+
+  function dayTotal(key){
+    return state.subjects.reduce(function(sum, s){ return sum + (s.log[key] || 0); }, 0);
+  }
+  function heatLevel(sec){
+    if(sec <= 0) return 0;
+    if(sec < 1800) return 1;      // dưới 30 phút
+    if(sec < 3600) return 2;      // 30 phút đến 1 giờ
+    if(sec < 7200) return 3;      // 1 đến 2 giờ
+    if(sec < 10800) return 4;     // 2 đến 3 giờ
+    return 5;                     // từ 3 giờ trở lên
+  }
+  function paintCell(cell, key){
+    cell.className = "heat-cell lv" + heatLevel(dayTotal(key)) + (key === todayKey() ? " today" : "");
+  }
+
+  function buildHeatmap(){
+    var today = startOfToday();
+    var start = mondayOf(addDays(today, -7*51));
+    heatGrid.innerHTML = "";
+    heatMonths.innerHTML = "";
+    heatCells = {};
+
+    var weeks = Math.round((mondayOf(today) - start) / (7*86400000)) + 1;
+    for(var w = 0; w < weeks; w++){
+      var weekStart = addDays(start, w*7);
+
+      var lbl = document.createElement("span");
+      for(var i = 0; i < 7; i++){
+        if(addDays(weekStart, i).getDate() === 1){ lbl.textContent = "Th" + (addDays(weekStart, i).getMonth()+1); break; }
+      }
+      heatMonths.appendChild(lbl);
+
+      for(var j = 0; j < 7; j++){
+        var d = addDays(weekStart, j);
+        var cell = document.createElement("span");
+        if(d > today){
+          cell.className = "heat-cell future";
+        } else {
+          var key = dayKey(d);
+          cell.setAttribute("data-day", key);
+          heatCells[key] = cell;
+          paintCell(cell, key);
+        }
+        heatGrid.appendChild(cell);
+      }
+    }
+    document.getElementById("heatWrap").scrollLeft = heatGrid.scrollWidth;
+  }
+
+  function tipFor(key){
+    var d = parseDay(key);
+    var total = 0, parts = [];
+    state.subjects.forEach(function(s){
+      var v = s.log[key] || 0;
+      if(v > 0){ total += v; parts.push({name:s.name, sec:v, color:s.color}); }
+    });
+    parts.sort(function(a,b){ return b.sec - a.sec; });
+
+    tipEl.innerHTML = "";
+    var date = document.createElement("div");
+    date.className = "tip-date";
+    date.textContent = DAY_NAMES[d.getDay()] + ", ngày " +
+      String(d.getDate()).padStart(2,"0") + " tháng " + String(d.getMonth()+1).padStart(2,"0") +
+      " năm " + d.getFullYear();
+    tipEl.appendChild(date);
+
+    if(!total){
+      var none = document.createElement("div");
+      none.className = "tip-empty";
+      none.textContent = "Chưa học buổi nào trong ngày này.";
+      tipEl.appendChild(none);
+      return;
+    }
+
+    var tot = document.createElement("div");
+    tot.className = "tip-total";
+    tot.textContent = "Tổng " + fmt(total);
+    tipEl.appendChild(tot);
+
+    parts.forEach(function(p){
+      var row = document.createElement("div");
+      row.className = "tip-row";
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = p.color;
+      var name = document.createElement("span");
+      name.textContent = p.name;
+      var amt = document.createElement("span");
+      amt.className = "amt";
+      amt.textContent = fmt(p.sec);
+      row.appendChild(dot); row.appendChild(name); row.appendChild(amt);
+      tipEl.appendChild(row);
+    });
+  }
+
+  function showTip(cell){
+    tipFor(cell.getAttribute("data-day"));
+    tipEl.hidden = false;
+    var r = cell.getBoundingClientRect();
+    var t = tipEl.getBoundingClientRect();
+    var left = Math.min(Math.max(8, r.left + r.width/2 - t.width/2), window.innerWidth - t.width - 8);
+    var top = r.top - t.height - 9;
+    if(top < 8) top = r.bottom + 9;
+    tipEl.style.left = left + "px";
+    tipEl.style.top = top + "px";
+  }
+  function hideTip(){ tipEl.hidden = true; }
+
+  heatGrid.addEventListener("mouseover", function(e){
+    var cell = e.target.closest(".heat-cell[data-day]");
+    if(cell) showTip(cell);
+  });
+  heatGrid.addEventListener("mouseout", function(e){
+    if(!e.relatedTarget || !e.relatedTarget.closest(".heat-cell[data-day]")) hideTip();
+  });
+  heatGrid.addEventListener("click", function(e){
+    var cell = e.target.closest(".heat-cell[data-day]");
+    if(cell) showTip(cell); else hideTip();
+  });
+  document.getElementById("heatWrap").addEventListener("scroll", hideTip);
+
   /* ---------- chế độ sáng tối ---------- */
   var themeMode = "auto";
   try{ themeMode = localStorage.getItem(THEME_KEY) || "auto"; }catch(e){}
@@ -1603,6 +1868,13 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     }
     if(themeMode === "auto") applyTheme();
     render();
+    if(heatDirty){
+      buildHeatmap();
+      heatDirty = false;
+    } else {
+      var cell = heatCells[todayKey()];
+      if(cell) paintCell(cell, todayKey());
+    }
   }, 1000);
 
   setInterval(function(){
@@ -1617,6 +1889,8 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   var startupNews = evaluateKPI();
   saveState();
   render();
+  buildHeatmap();
+  heatDirty = false;
   initSync();
   if(startupNews.length) showReport(startupNews);
 })();
