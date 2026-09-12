@@ -321,6 +321,41 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   border-top:1px solid var(--line);
   flex-wrap:wrap;
 }
+.sync{
+  margin-top:26px;
+  border:1px solid var(--line);
+  background:var(--paper-raised);
+  padding:14px 16px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:14px;
+  flex-wrap:wrap;
+}
+.sync-title{
+  display:block;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--ink-soft);
+  margin-bottom:5px;
+}
+.sync-status{ font-size:13px; }
+.sync-status.warn{ color:var(--danger); }
+.sync-status .who{ font-family:"IBM Plex Mono", Consolas, monospace; font-size:12.5px; }
+.sync-right{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.sync-right input[type=email]{
+  background:var(--paper);
+  border:1px solid var(--line);
+  color:var(--ink);
+  font-family:inherit;
+  font-size:13px;
+  padding:8px 11px;
+  border-radius:6px;
+  min-width:190px;
+}
+.sync-right input[type=email]:focus{ outline:none; border-color:var(--accent); }
+
 .toolbar .hint{ font-size:11.5px; color:var(--ink-soft); }
 .toolbar .tools{ display:flex; gap:8px; }
 .btn-ghost{
@@ -526,6 +561,14 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     </div>
   </div>
 
+  <div class="sync" id="syncBox" hidden>
+    <div>
+      <span class="sync-title">Đồng bộ nhiều thiết bị</span>
+      <span class="sync-status" id="syncStatus">Chưa đăng nhập — dữ liệu chỉ nằm trên máy này.</span>
+    </div>
+    <div class="sync-right" id="syncActions"></div>
+  </div>
+
   <div class="toolbar">
     <div class="hint" id="storageHint">Dữ liệu lưu trên máy này.</div>
     <div class="tools">
@@ -590,8 +633,11 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
 <script>
 (function(){
+  var SUPABASE_URL = "https://sktkmaebqqfrhofpgeib.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_fDCDS4uwZj8L-6uRLRPb8A_5xOv6MH0";
   var STORAGE_KEY = "soGioHoc_v1";
   var THEME_KEY = "soGioHoc_theme";
   var PALETTE = ["#A9782E","#5B7A5E","#4E6E8E","#9C4A3B","#7A5B96","#6B6455"];
@@ -667,6 +713,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     }
     return {
       version: 2,
+      seeded: true,
       lastDay: todayKey(),
       lastCheck: todayKey(),
       subjects: [
@@ -713,9 +760,14 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   }
 
   function saveState(){
+    state.updatedAt = Date.now();
     try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
     catch(e){ storageOK = false; updateStorageHint(); }
+    queuePush();
   }
+
+  /* dữ liệu mẫu lúc mới cài không được phép ghi đè sổ thật trên máy chủ */
+  function markTouched(){ if(state.seeded) delete state.seeded; }
 
   var state = loadState();
   var openMenuId = null;
@@ -747,6 +799,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
 
   function toggleRun(id){
     flushRunning();
+    markTouched();
     var subj = state.subjects.find(function(s){ return s.id === id; });
     if(!subj) return;
     if(subj.running){
@@ -993,6 +1046,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     var m = parseInt(document.getElementById("kpiMinutes").value, 10) || 0;
     var target = h*3600 + m*60;
     if(target <= 0){ notify("Chỉ tiêu chưa hợp lệ", "Hãy nhập số giờ hoặc số phút lớn hơn 0."); return; }
+    markTouched();
     var changed = subj.kpi.period !== kpiPeriodSel || subj.kpi.targetSeconds !== target || !subj.kpi.enabled;
     subj.kpi.enabled = true;
     subj.kpi.period = kpiPeriodSel;
@@ -1113,6 +1167,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   function addSubject(name, color){
     name = name.trim();
     if(!name) return;
+    markTouched();
     state.subjects.push({
       id: "s" + Date.now(),
       name: name,
@@ -1378,6 +1433,143 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     });
   });
 
+  /* ---------- đồng bộ nhiều thiết bị qua Supabase ----------
+     Chỉ bật khi app chạy trên web thật; bản mở từ file trên máy và bản nhúng
+     trong artifact của Claude vẫn lưu cục bộ như cũ. */
+  var SYNC_ENABLED = /^https?:$/.test(location.protocol) && !/claude\.ai$/.test(location.hostname);
+  var sb = null, sbUser = null, pushTimer = null, pulling = false;
+  var syncBox = document.getElementById("syncBox");
+  var syncStatusEl = document.getElementById("syncStatus");
+  var syncActions = document.getElementById("syncActions");
+
+  function syncSay(text, warn){
+    syncStatusEl.textContent = text;
+    syncStatusEl.classList.toggle("warn", !!warn);
+  }
+  function hhmm(){
+    var d = new Date();
+    return String(d.getHours()).padStart(2,"0") + ":" + String(d.getMinutes()).padStart(2,"0");
+  }
+
+  function renderSync(){
+    syncActions.innerHTML = "";
+    if(sbUser){
+      var out = document.createElement("button");
+      out.className = "btn-ghost";
+      out.textContent = "Đăng xuất";
+      out.addEventListener("click", function(){
+        sb.auth.signOut().then(function(){
+          syncSay("Đã đăng xuất. Dữ liệu vẫn còn trên máy này.");
+        });
+      });
+      syncActions.appendChild(out);
+      return;
+    }
+    var input = document.createElement("input");
+    input.type = "email";
+    input.placeholder = "email của bạn";
+    input.setAttribute("aria-label", "Email đăng nhập");
+    var send = document.createElement("button");
+    send.className = "btn-add";
+    send.textContent = "Gửi liên kết đăng nhập";
+    function submit(){
+      var email = input.value.trim();
+      if(email.indexOf("@") < 1){ syncSay("Hãy nhập đúng địa chỉ email.", true); return; }
+      send.disabled = true;
+      syncSay("Đang gửi liên kết…");
+      sb.auth.signInWithOtp({
+        email: email,
+        options: { emailRedirectTo: location.origin + location.pathname }
+      }).then(function(r){
+        send.disabled = false;
+        if(r.error){
+          syncSay(/rate|limit/i.test(r.error.message)
+            ? "Đã gửi quá nhiều lần, hãy đợi vài phút rồi thử lại."
+            : "Không gửi được liên kết: " + r.error.message, true);
+          return;
+        }
+        syncSay("Đã gửi liên kết tới " + email + ". Mở email trên thiết bị này rồi bấm vào liên kết.");
+      });
+    }
+    send.addEventListener("click", submit);
+    input.addEventListener("keydown", function(e){ if(e.key === "Enter") submit(); });
+    syncActions.appendChild(input);
+    syncActions.appendChild(send);
+  }
+
+  function setUser(u){
+    var changed = (u && u.id) !== (sbUser && sbUser.id);
+    sbUser = u;
+    renderSync();
+    if(u && changed){
+      syncSay("Đang đồng bộ sổ của " + u.email + "…");
+      pullRemote();
+    }
+  }
+
+  function useRemote(remote){
+    state = migrate(remote);
+    state.syncedAt = Date.now();
+    saveState();
+    render();
+    syncSay("Đã lấy dữ liệu mới nhất từ máy chủ lúc " + hhmm() + ".");
+  }
+
+  function pushRemote(){
+    if(!sb || !sbUser || pulling) return;
+    flushRunning();
+    state.syncedAt = Date.now();
+    sb.from("study_books").upsert({
+      user_id: sbUser.id,
+      data: JSON.parse(JSON.stringify(state)),
+      updated_at: new Date().toISOString()
+    }).then(function(r){
+      if(r.error) syncSay("Chưa lưu được lên máy chủ: " + r.error.message, true);
+      else syncSay("Đã đồng bộ lúc " + hhmm() + " · " + sbUser.email);
+    });
+  }
+
+  function pullRemote(){
+    pulling = true;
+    sb.from("study_books").select("data").eq("user_id", sbUser.id).maybeSingle().then(function(r){
+      pulling = false;
+      if(r.error){ syncSay("Không tải được dữ liệu trên máy chủ.", true); return; }
+      var remote = r.data && r.data.data;
+      if(!remote || !Array.isArray(remote.subjects)){ pushRemote(); return; }
+      if(state.seeded){ useRemote(remote); return; }
+      if(!state.syncedAt){
+        askConfirm("Tài khoản này đã có sổ trên máy chủ",
+          "Máy này cũng đang có dữ liệu chưa từng đồng bộ. Giữ lại bên nào?",
+          "Lấy sổ trên máy chủ").then(function(ok){
+          if(ok) useRemote(remote); else pushRemote();
+        });
+        return;
+      }
+      if((remote.updatedAt || 0) > (state.updatedAt || 0)) useRemote(remote);
+      else pushRemote();
+    });
+  }
+
+  function queuePush(){
+    if(!sb || !sbUser || pulling) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushRemote, 2500);
+  }
+
+  function initSync(){
+    if(!SYNC_ENABLED || !window.supabase || !window.supabase.createClient) return;
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    syncBox.hidden = false;
+    renderSync();
+    sb.auth.getSession().then(function(r){
+      if(r.data && r.data.session) setUser(r.data.session.user);
+    });
+    sb.auth.onAuthStateChange(function(evt, session){
+      if(evt === "SIGNED_OUT"){ sbUser = null; renderSync(); return; }
+      if(session && session.user) setUser(session.user);
+    });
+  }
+
   function updateStorageHint(){
     var el = document.getElementById("storageHint");
     if(storageOK){
@@ -1425,6 +1617,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   var startupNews = evaluateKPI();
   saveState();
   render();
+  initSync();
   if(startupNews.length) showReport(startupNews);
 })();
 </script>
