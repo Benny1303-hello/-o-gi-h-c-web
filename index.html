@@ -610,8 +610,10 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
 @media (max-width:560px){
   .summary{ grid-template-columns:1fr; }
   .row{ grid-template-columns:18px 1fr auto; grid-row-gap:8px; }
-  .row-actions{ grid-column:3; }
-  .timer{ grid-column:2 / 4; text-align:left; min-width:0; }
+  .row .tag{ grid-column:1; grid-row:1; }
+  .row .row-main{ grid-column:2; grid-row:1; }
+  .row-actions{ grid-column:3; grid-row:1; }
+  .timer{ grid-column:2 / 4; grid-row:2; text-align:left; min-width:0; }
 }
 @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
 </style>
@@ -920,17 +922,23 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     return subj.kpi.period === "week" ? weekSec(subj) : todaySec(subj);
   }
 
-  /* dồn thời gian đang chạy vào nhật ký, chính xác tới từng giây và đúng ngày */
+  /* dồn thời gian đang chạy vào nhật ký, chính xác tới từng giây; nếu máy ngủ
+     qua nửa đêm thì phần sau 0:00 được tính cho ngày mới chứ không dồn hết về hôm trước */
   function flushRunning(){
     var now = Date.now();
     state.subjects.forEach(function(s){
       if(!s.running || !s.startedAt) return;
-      var sec = Math.floor((now - s.startedAt)/1000);
-      if(sec <= 0) return;
-      var key = dayKey(new Date(s.startedAt));
-      s.log[key] = (s.log[key] || 0) + sec;
-      s.totalSeconds += sec;
-      s.startedAt += sec*1000;
+      while(s.startedAt + 1000 <= now){
+        var midnight = addDays(new Date(s.startedAt), 1).getTime();
+        var until = Math.min(now, midnight);
+        var sec = Math.floor((until - s.startedAt)/1000);
+        if(sec <= 0){ s.startedAt = until; continue; }
+        var key = dayKey(new Date(s.startedAt));
+        s.log[key] = (s.log[key] || 0) + sec;
+        s.totalSeconds += sec;
+        s.startedAt += sec*1000;
+        if(until === now) break;
+      }
     });
   }
 
@@ -1191,6 +1199,8 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     if(changed){
       subj.kpi.setOn = todayKey();   // kỳ đang diễn ra không bị chấm bằng chỉ tiêu cũ
       subj.kpiHistory = [];
+      delete subj.lastVerdict;       // chuỗi mới phải được nhận xét lại từ mốc 3
+      subj.editedAt = Date.now();
     }
     saveState();
     closeKpiDialog();
@@ -1200,6 +1210,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     var subj = state.subjects.find(function(s){ return s.id === kpiEditingId; });
     if(subj){
       subj.kpi.enabled = false;
+      subj.editedAt = Date.now();
       saveState();
     }
     closeKpiDialog();
@@ -1275,6 +1286,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       subj.running = false; subj.startedAt = null;
       subj.totalSeconds = 0; subj.log = {}; subj.kpiHistory = [];
       delete subj.lastVerdict;
+      subj.resetAt = subj.editedAt = Date.now();
       if(subj.kpi.enabled) subj.kpi.setOn = todayKey();
       saveState(); render();
     });
@@ -1287,6 +1299,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       name = name.trim();
       if(!name) return;
       subj.name = name.slice(0,30);
+      subj.editedAt = Date.now();
       saveState(); render();
     });
   }
@@ -1298,6 +1311,8 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       "Xoá môn", true).then(function(ok){
       if(!ok) return;
       state.subjects = state.subjects.filter(function(s){ return s.id !== id; });
+      if(!state.deleted) state.deleted = {};
+      state.deleted[id] = Date.now();   // để máy khác khi đồng bộ không hồi sinh môn đã xoá
       saveState(); render();
     });
   }
@@ -1391,7 +1406,10 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
         "Nạp bản sao", true).then(function(ok){
         if(!ok) return;
         state = migrate(data);
+        delete state.seeded;
+        var news = evaluateKPI();
         saveState(); render();
+        if(news.length) showReport(news);
       });
     };
     reader.readAsText(f);
@@ -1408,6 +1426,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
 
   function render(){
     ledgerEl.innerHTML = "";
+    rowRefs = {};
     emptyHint.style.display = state.subjects.length ? "none" : "block";
     var runningSubj = null, kpiOn = 0, kpiHit = 0;
 
@@ -1524,21 +1543,23 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
         var b = document.createElement("button");
         b.textContent = item.text;
         if(item.danger) b.className = "danger";
-        b.addEventListener("click", function(e){ e.stopPropagation(); openMenuId = null; item.fn(); });
+        b.addEventListener("click", function(e){ e.stopPropagation(); openMenuId = null; render(); item.fn(); });
         menu.appendChild(b);
       });
       menuWrap.appendChild(menu);
       actions.appendChild(menuWrap);
       row.appendChild(actions);
       ledgerEl.appendChild(row);
+
+      rowRefs[subj.id] = {
+        today: todaySpan, timer: timer, running: subj.running,
+        fill: subj.kpi.enabled ? fill : null,
+        num: subj.kpi.enabled ? num : null,
+        hit: subj.kpi.enabled ? hit : null
+      };
     });
 
-    var todayTotal = state.subjects.reduce(function(sum, s){ return sum + todaySec(s); }, 0);
-    var allTotal = state.subjects.reduce(function(sum, s){ return sum + s.totalSeconds; }, 0);
-    document.getElementById("todayTotal").textContent = fmt(todayTotal);
-    document.getElementById("allTimeTotal").textContent = fmt(allTotal);
-    document.getElementById("activeSubject").textContent = runningSubj ? runningSubj.name : "— chưa bấm giờ —";
-    document.title = runningSubj ? fmt(todaySec(runningSubj)) + " · " + runningSubj.name : "Sổ Giờ Học";
+    updateTotals();
 
     var sum = document.getElementById("kpiSummary");
     if(!kpiOn){
@@ -1548,6 +1569,37 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       sum.innerHTML = "Chỉ tiêu đang theo dõi: <strong>" + kpiHit + "/" + kpiOn + "</strong> môn đã đạt trong kỳ này.";
       document.getElementById("kpiHintText").textContent = "Kết quả được chấm khi ngày hoặc tuần khép lại.";
     }
+  }
+
+  function updateTotals(){
+    var runningSubj = state.subjects.find(function(s){ return s.running; }) || null;
+    var todayTotal = state.subjects.reduce(function(sum, s){ return sum + todaySec(s); }, 0);
+    var allTotal = state.subjects.reduce(function(sum, s){ return sum + s.totalSeconds; }, 0);
+    document.getElementById("todayTotal").textContent = fmt(todayTotal);
+    document.getElementById("allTimeTotal").textContent = fmt(allTotal);
+    document.getElementById("activeSubject").textContent = runningSubj ? runningSubj.name : "— chưa bấm giờ —";
+    document.title = runningSubj ? fmt(todaySec(runningSubj)) + " · " + runningSubj.name : "Sổ Giờ Học";
+  }
+
+  /* mỗi giây chỉ cập nhật chữ số; dựng lại cả danh sách mỗi giây sẽ nuốt mất
+     cú bấm nút rơi đúng lúc dựng lại và làm mất vị trí focus bàn phím */
+  var rowRefs = {};
+  function tick(){
+    var needFull = Object.keys(rowRefs).length !== state.subjects.length;
+    state.subjects.forEach(function(subj){
+      if(needFull) return;
+      var r = rowRefs[subj.id];
+      if(!r || r.running !== subj.running || !!r.fill !== !!subj.kpi.enabled){ needFull = true; return; }
+      r.today.textContent = "Hôm nay " + fmt(todaySec(subj));
+      r.timer.textContent = fmt(subj.totalSeconds);
+      if(subj.kpi.enabled){
+        var done = kpiDone(subj), target = subj.kpi.targetSeconds;
+        if((done >= target) !== r.hit){ needFull = true; return; }
+        r.fill.style.width = Math.min(100, Math.round(done/target*100)) + "%";
+        r.num.textContent = fmtShort(done) + " / " + fmtShort(target);
+      }
+    });
+    if(needFull) render(); else updateTotals();
   }
 
   /* ---------- bảng nhiệt theo ngày ---------- */
@@ -1604,6 +1656,11 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       }
     }
     document.getElementById("heatWrap").scrollLeft = heatGrid.scrollWidth;
+  }
+
+  /* tô lại màu ô tại chỗ, không dựng lại lưới nên không làm nhảy vị trí cuộn */
+  function repaintHeatmap(){
+    Object.keys(heatCells).forEach(function(k){ paintCell(heatCells[k], k); });
   }
 
   function tipFor(key){
@@ -1677,6 +1734,9 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     if(cell) showTip(cell); else hideTip();
   });
   document.getElementById("heatWrap").addEventListener("scroll", hideTip);
+  document.addEventListener("click", function(e){
+    if(!tipEl.hidden && !e.target.closest("#heatGrid")) hideTip();
+  });
 
   /* ---------- chế độ sáng tối ---------- */
   var themeMode = "auto";
@@ -1702,7 +1762,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
      Chỉ bật khi app chạy trên web thật; bản mở từ file trên máy và bản nhúng
      trong artifact của Claude vẫn lưu cục bộ như cũ. */
   var SYNC_ENABLED = /^https?:$/.test(location.protocol) && !/claude\.ai$/.test(location.hostname);
-  var sb = null, sbUser = null, pushTimer = null, pulling = false;
+  var sb = null, sbUser = null, pushTimer = null;
   var syncBox = document.getElementById("syncBox");
   var syncStatusEl = document.getElementById("syncStatus");
   var syncActions = document.getElementById("syncActions");
@@ -1754,6 +1814,9 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
           return;
         }
         syncSay("Đã gửi liên kết tới " + email + ". Mở email trên thiết bị này rồi bấm vào liên kết.");
+      }).catch(function(){
+        send.disabled = false;
+        syncSay("Không gửi được liên kết vì mất kết nối. Hãy thử lại.", true);
       });
     }
     send.addEventListener("click", submit);
@@ -1768,71 +1831,183 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     renderSync();
     if(u && changed){
       syncSay("Đang đồng bộ sổ của " + u.email + "…");
-      pullRemote();
+      syncNow();
     }
   }
 
-  function useRemote(remote){
-    state = migrate(remote);
-    state.syncedAt = Date.now();
-    saveState();
-    render();
-    syncSay("Đã lấy dữ liệu mới nhất từ máy chủ lúc " + hhmm() + ".");
+  /* thông tin đồng bộ riêng của từng thiết bị, không đẩy lên máy chủ */
+  var SYNC_META_KEY = "soGioHoc_sync";
+  function readMeta(){
+    try{ return JSON.parse(localStorage.getItem(SYNC_META_KEY)) || {}; }catch(e){ return {}; }
+  }
+  function writeMeta(m){
+    try{ localStorage.setItem(SYNC_META_KEY, JSON.stringify(m)); }catch(e){}
+  }
+  function saveLocalOnly(){
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
+  }
+  function blankState(){
+    var s = defaultState();
+    s.subjects = [];
+    delete s.seeded;
+    return s;
+  }
+  function clearSeedHours(){
+    state.subjects.forEach(function(s){ s.log = {}; s.totalSeconds = 0; s.kpiHistory = []; });
+    delete state.seeded;
+  }
+  function adoptRemote(remote){
+    state = migrate(JSON.parse(JSON.stringify(remote)));
+    delete state.seeded;
   }
 
-  function pushRemote(){
-    if(!sb || !sbUser || pulling) return;
-    flushRunning();
-    state.syncedAt = Date.now();
-    sb.from("study_books").upsert({
-      user_id: sbUser.id,
-      data: JSON.parse(JSON.stringify(state)),
-      updated_at: new Date().toISOString()
-    }).then(function(r){
-      if(r.error) syncSay("Chưa lưu được lên máy chủ: " + r.error.message, true);
-      else syncSay("Đã đồng bộ lúc " + hhmm() + " · " + sbUser.email);
-    });
-  }
-
-  function pullRemote(){
-    pulling = true;
-    sb.from("study_books").select("data").eq("user_id", sbUser.id).maybeSingle().then(function(r){
-      pulling = false;
-      if(r.error){ syncSay("Không tải được dữ liệu trên máy chủ.", true); return; }
-      var remote = r.data && r.data.data;
-      if(!remote || !Array.isArray(remote.subjects)){ pushRemote(); return; }
-      if(state.seeded){ useRemote(remote); return; }
-      if(!state.syncedAt){
-        askConfirm("Tài khoản này đã có sổ trên máy chủ",
-          "Máy này cũng đang có dữ liệu chưa từng đồng bộ. Giữ lại bên nào?",
-          "Lấy sổ trên máy chủ").then(function(ok){
-          if(ok) useRemote(remote); else pushRemote();
-        });
-        return;
+  function rescore(subj){
+    subj.kpiHistory.forEach(function(r){
+      if(r.period === "week"){
+        var mon = parseDay(r.key.slice(1)), sum = 0;
+        for(var i=0;i<7;i++) sum += subj.log[dayKey(addDays(mon,i))] || 0;
+        r.seconds = sum;
+      } else {
+        r.seconds = subj.log[r.key] || 0;
       }
-      if((remote.updatedAt || 0) > (state.updatedAt || 0)) useRemote(remote);
-      else pushRemote();
+      r.ok = r.seconds >= r.target;
     });
+  }
+
+  /* gộp sổ trên máy chủ vào sổ trên máy: giờ học từng ngày lấy bên lớn hơn nên
+     không thiết bị nào làm mất giờ của thiết bị kia; tên, màu, KPI theo bên sửa
+     sau cùng; môn đã xoá ở bất kỳ đâu thì không hồi sinh */
+  function mergeFrom(remoteData){
+    var remote = migrate(JSON.parse(JSON.stringify(remoteData)));
+    var deleted = Object.assign({}, remote.deleted || {}, state.deleted || {});
+    var byId = {};
+    state.subjects.forEach(function(s){ byId[s.id] = s; });
+
+    remote.subjects.forEach(function(rs){
+      var ls = byId[rs.id];
+      if(!ls){ state.subjects.push(rs); return; }
+
+      var ra = rs.resetAt || 0, la = ls.resetAt || 0;
+      if(ra > la){
+        ls.log = rs.log; ls.totalSeconds = rs.totalSeconds; ls.resetAt = rs.resetAt;
+      } else if(ra === la){
+        Object.keys(rs.log).forEach(function(day){
+          var extra = (rs.log[day] || 0) - (ls.log[day] || 0);
+          if(extra > 0){ ls.log[day] = rs.log[day]; ls.totalSeconds += extra; }
+        });
+      }
+
+      var re = rs.editedAt || 0, le = ls.editedAt || 0;
+      if(re > le){
+        ls.name = rs.name; ls.color = rs.color; ls.kpi = rs.kpi; ls.editedAt = rs.editedAt;
+        ls.kpiHistory = rs.kpiHistory; ls.lastVerdict = rs.lastVerdict;
+      } else if(re === le){
+        var have = {};
+        ls.kpiHistory.forEach(function(r){ have[r.key] = true; });
+        rs.kpiHistory.forEach(function(r){ if(!have[r.key]) ls.kpiHistory.push(r); });
+        ls.kpiHistory.sort(function(a,b){ return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
+        if(ls.kpiHistory.length > 60) ls.kpiHistory = ls.kpiHistory.slice(-60);
+        if(rs.lastVerdict && (!ls.lastVerdict || rs.lastVerdict.milestone > ls.lastVerdict.milestone)){
+          ls.lastVerdict = rs.lastVerdict;
+        }
+      }
+      rescore(ls);
+    });
+
+    state.subjects = state.subjects.filter(function(s){ return !deleted[s.id]; });
+    state.deleted = deleted;
+    if(remote.lastCheck && remote.lastCheck > (state.lastCheck || "")) state.lastCheck = remote.lastCheck;
+    delete state.seeded;
+  }
+
+  var syncBusy = false, syncAgain = false;
+  function serverMs(row){ return row && row.updated_at ? Date.parse(row.updated_at) : 0; }
+
+  /* một lượt đồng bộ: đọc máy chủ → nếu máy khác vừa ghi thì gộp → ghi lại khi có thay đổi */
+  function syncNow(){
+    if(!sb || !sbUser) return;
+    if(syncBusy){ syncAgain = true; return; }
+    syncBusy = true;
+    var user = sbUser;
+    var meta = readMeta();
+    var sameUser = meta.userId === user.id;
+
+    sb.from("study_books").select("data,updated_at").eq("user_id", user.id).maybeSingle()
+      .then(function(r){
+        if(r.error) throw r.error;
+        var row = r.data;
+        var remote = row && row.data && Array.isArray(row.data.subjects) ? row.data : null;
+
+        if(meta.userId && !sameUser){
+          // máy này vừa dùng tài khoản khác: không trộn sổ của hai người
+          if(remote) adoptRemote(remote); else state = blankState();
+        } else if(remote && state.seeded){
+          adoptRemote(remote);
+        } else if(remote && (!sameUser || serverMs(row) !== meta.serverAt)){
+          mergeFrom(remote);
+        } else if(!remote && state.seeded){
+          clearSeedHours();
+        }
+
+        var dirty = !sameUser || !remote || (state.updatedAt || 0) > (meta.pushedAt || 0);
+        if(!dirty){
+          writeMeta({ userId:user.id, serverAt:serverMs(row), pushedAt:meta.pushedAt });
+          return;
+        }
+        flushRunning();
+        var iso = new Date().toISOString();
+        var stamp = state.updatedAt || 0;
+        return sb.from("study_books").upsert({
+          user_id: user.id,
+          data: JSON.parse(JSON.stringify(state)),
+          updated_at: iso
+        }).then(function(w){
+          if(w.error) throw w.error;
+          writeMeta({ userId:user.id, serverAt:Date.parse(iso), pushedAt:stamp });
+        });
+      })
+      .then(function(){
+        saveLocalOnly();
+        render();
+        heatDirty = true;
+        syncSay("Đã đồng bộ lúc " + hhmm() + " · " + user.email);
+      })
+      .catch(function(err){
+        syncSay("Chưa đồng bộ được (" + ((err && err.message) || "mất kết nối") + "). App sẽ tự thử lại.", true);
+      })
+      .then(function(){
+        syncBusy = false;
+        runStartupKPI();
+        if(syncAgain){ syncAgain = false; syncNow(); }
+      });
   }
 
   function queuePush(){
-    if(!sb || !sbUser || pulling) return;
+    if(!sb || !sbUser) return;
     clearTimeout(pushTimer);
-    pushTimer = setTimeout(pushRemote, 2500);
+    pushTimer = setTimeout(syncNow, 2500);
   }
 
+  /* trả về true nếu việc chấm KPI lúc mở app sẽ chờ đồng bộ xong mới chạy,
+     để máy cũ không chấm "trượt" cho ngày đã học ở máy khác */
   function initSync(){
-    if(!SYNC_ENABLED || !window.supabase || !window.supabase.createClient) return;
+    if(!SYNC_ENABLED || !window.supabase || !window.supabase.createClient) return false;
     sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     syncBox.hidden = false;
     renderSync();
     sb.auth.getSession().then(function(r){
       if(r.data && r.data.session) setUser(r.data.session.user);
-    });
+      else runStartupKPI();
+    }).catch(runStartupKPI);
     sb.auth.onAuthStateChange(function(evt, session){
       if(evt === "SIGNED_OUT"){ sbUser = null; renderSync(); return; }
       if(session && session.user) setUser(session.user);
     });
+    document.addEventListener("visibilitychange", function(){
+      if(document.visibilityState === "visible") syncNow();
+    });
+    setTimeout(runStartupKPI, 8000);
+    return true;
   }
 
   function updateStorageHint(){
@@ -1856,20 +2031,45 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     saveState();
   });
 
+  /* mở app ở hai tab: tab cũ phải nhận dữ liệu mới, nếu không lúc đóng tab cũ
+     nó sẽ ghi đè mất giờ vừa học ở tab kia */
+  window.addEventListener("storage", function(e){
+    if(e.key !== STORAGE_KEY || !e.newValue) return;
+    var s = null;
+    try{ s = JSON.parse(e.newValue); }catch(err){}
+    if(!s || !Array.isArray(s.subjects)) return;
+    state = s;
+    render();
+    heatDirty = true;
+  });
+
+  var startupKpiDone = false;
+  function runStartupKPI(){
+    if(startupKpiDone) return;
+    startupKpiDone = true;
+    var news = evaluateKPI();
+    saveState();
+    render();
+    if(news.length) showReport(news);
+  }
+
   /* nhịp 1 giây: dồn giờ, sang ngày mới thì chấm KPI ngay */
   setInterval(function(){
     flushRunning();
     if(state.lastDay !== todayKey()){
       state.lastDay = todayKey();
       renderDate();
-      var news = evaluateKPI();
-      saveState();
-      if(news.length) showReport(news);
+      buildHeatmap();
+      if(startupKpiDone){
+        var news = evaluateKPI();
+        saveState();
+        if(news.length) showReport(news);
+      }
     }
     if(themeMode === "auto") applyTheme();
-    render();
+    tick();
     if(heatDirty){
-      buildHeatmap();
+      repaintHeatmap();
       heatDirty = false;
     } else {
       var cell = heatCells[todayKey()];
@@ -1886,13 +2086,10 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   renderDate();
   updateStorageHint();
   state.lastDay = todayKey();
-  var startupNews = evaluateKPI();
-  saveState();
   render();
   buildHeatmap();
   heatDirty = false;
-  initSync();
-  if(startupNews.length) showReport(startupNews);
+  if(!initSync()) runStartupKPI();
 })();
 </script>
 </body>
