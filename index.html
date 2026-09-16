@@ -794,8 +794,13 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     "Ba lần đạt KPI liên tiếp — việc học đã thành thói quen, không còn phụ thuộc vào hứng.",
     "Xuất sắc. Ba lần giữ đúng lời hứa với chính mình.",
     "Ba lần đạt liên tiếp. Cứ giữ nhịp này, kết quả sẽ tự tìm đến bạn.",
-    "Bạn vừa chứng minh mình làm được điều mình nói — ba lần liên tiếp."
+    "Bạn vừa chứng minh mình làm được điều mình nói — ba lần liên tiếp.",
+    "Mày đã và đang làm rất tốt rồi hãy cố gắng lên nhé t tự hào về mày lắm đó “tao” à.",
+    "Vậy là đã đi đc thêm 1 chặng đường cố gắng vào đại học và ngành nghề mày muốn rồi hãy tiếp tục và cố lên nhé “tao” à.",
+    "Dù những ngày qua học hành chẳng dễ dàng gì, sau 1 ngày học mệt lã người thì mày vẫn phải tiếp tục học ngoài giờ với các môn khác nên là hãy cố lên nhé bản thân tao."
   ];
+  function pickPraise(){ return PRAISES[Math.floor(Math.random()*PRAISES.length)]; }
+  function pickRoast(){ return ROASTS[Math.floor(Math.random()*ROASTS.length)]; }
 
   /* ---------- ngày tháng ---------- */
   function dayKey(d){
@@ -906,7 +911,12 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
   }
 
   /* dữ liệu mẫu lúc mới cài không được phép ghi đè sổ thật trên máy chủ */
-  function markTouched(){ if(state.seeded) delete state.seeded; }
+  function markTouched(){
+    if(!state.seeded) return;
+    delete state.seeded;
+    // ngày học trong dữ liệu mẫu không được tính vào mốc khen
+    if(typeof state.praisedGoodDays !== "number") state.praisedGoodDays = Math.floor(goodDayCount()/3);
+  }
 
   var state = loadState();
   var openMenuId = null;
@@ -1017,6 +1027,24 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     return last ? {ok:n, fail:0} : {ok:0, fail:n};
   }
 
+  /* đếm số ngày học trên 1 tiếng (cộng tất cả các môn); cứ thêm 3 ngày như vậy
+     thì lần mở app sau sẽ có một lời khen */
+  function goodDayCount(){
+    var totals = {};
+    state.subjects.forEach(function(s){
+      Object.keys(s.log).forEach(function(k){ totals[k] = (totals[k] || 0) + s.log[k]; });
+    });
+    return Object.keys(totals).filter(function(k){ return totals[k] > 3600; }).length;
+  }
+  function checkGoodDays(){
+    if(state.seeded) return null;                   // dữ liệu mẫu không tính
+    var n = goodDayCount();
+    var milestone = Math.floor(n/3);
+    if(milestone <= (state.praisedGoodDays || 0)) return null;
+    state.praisedGoodDays = milestone;
+    return { count: n, text: pickPraise() };
+  }
+
   function systemNotify(title, body){
     try{
       if(!("Notification" in window)) return;
@@ -1029,8 +1057,9 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     }catch(e){}
   }
 
-  function showReport(news){
-    if(!news.length) return;
+  function showReport(news, praise){
+    news = news || [];
+    if(!news.length && !praise) return;
     var body = document.getElementById("reportBody");
     body.innerHTML = "";
 
@@ -1083,7 +1112,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       subj.lastVerdict = {bad:bad, milestone:milestone};
       verdicts.push({
         subject: subj, bad: bad, streak: n,
-        text: (bad ? ROASTS : PRAISES)[(milestone - 1) % (bad ? ROASTS.length : PRAISES.length)]
+        text: bad ? pickRoast() : pickPraise()
       });
     });
 
@@ -1106,10 +1135,30 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       body.appendChild(box);
     });
 
+    if(praise){
+      var pbox = document.createElement("div");
+      pbox.className = "verdict good";
+      var pstamp = document.createElement("div");
+      pstamp.className = "stamp";
+      pstamp.textContent = "Ghi nhận · " + praise.count + " ngày học trên 1 tiếng";
+      var pp = document.createElement("p");
+      pp.textContent = praise.text;
+      var pwho = document.createElement("div");
+      pwho.className = "who-line";
+      pwho.textContent = "Cứ thêm ba ngày học trên 1 tiếng, sổ lại ghi cho bạn một lời.";
+      pbox.appendChild(pstamp);
+      pbox.appendChild(pp);
+      pbox.appendChild(pwho);
+      body.appendChild(pbox);
+    }
+
     var failCount = news.filter(function(n){ return !n.res.ok; }).length;
-    document.getElementById("reportSub").textContent = failCount
-      ? failCount + " kỳ không đạt chỉ tiêu kể từ lần mở app trước."
-      : "Tất cả các kỳ đã khép lại đều đạt chỉ tiêu.";
+    document.getElementById("reportTitle").textContent = news.length ? "Tổng kết chỉ tiêu" : "Ghi nhận thành quả";
+    document.getElementById("reportSub").textContent = !news.length
+      ? "Nhìn lại quãng đường bạn vừa đi qua."
+      : (failCount
+          ? failCount + " kỳ không đạt chỉ tiêu kể từ lần mở app trước."
+          : "Tất cả các kỳ đã khép lại đều đạt chỉ tiêu.");
 
     document.getElementById("reportModal").hidden = false;
     saveState();
@@ -1117,6 +1166,8 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     if(verdicts.length){
       var v0 = verdicts[0];
       systemNotify(v0.bad ? "KPI không đạt — môn " + v0.subject.name : "Đạt KPI — môn " + v0.subject.name, v0.text);
+    } else if(praise){
+      systemNotify("Sổ Giờ Học", praise.text);
     } else if(failCount){
       systemNotify("Có chỉ tiêu chưa hoàn thành", failCount + " kỳ không đạt. Mở Sổ Giờ Học để xem chi tiết.");
     }
@@ -1917,6 +1968,7 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     state.subjects = state.subjects.filter(function(s){ return !deleted[s.id]; });
     state.deleted = deleted;
     if(remote.lastCheck && remote.lastCheck > (state.lastCheck || "")) state.lastCheck = remote.lastCheck;
+    state.praisedGoodDays = Math.max(state.praisedGoodDays || 0, remote.praisedGoodDays || 0);
     delete state.seeded;
   }
 
@@ -2048,9 +2100,10 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
     if(startupKpiDone) return;
     startupKpiDone = true;
     var news = evaluateKPI();
+    var praise = checkGoodDays();
     saveState();
     render();
-    if(news.length) showReport(news);
+    showReport(news, praise);
   }
 
   /* nhịp 1 giây: dồn giờ, sang ngày mới thì chấm KPI ngay */
@@ -2062,8 +2115,9 @@ button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; borde
       buildHeatmap();
       if(startupKpiDone){
         var news = evaluateKPI();
+        var praise = checkGoodDays();
         saveState();
-        if(news.length) showReport(news);
+        showReport(news, praise);
       }
     }
     if(themeMode === "auto") applyTheme();
